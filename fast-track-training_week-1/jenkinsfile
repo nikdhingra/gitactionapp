@@ -1,0 +1,147 @@
+pipeline {
+    agent any
+    
+    environment {
+        GITHUB_CREDENTIALS_ID = 'github-pat'  // Jenkins credential ID for GitHub PAT
+        REPO_URL = 'github.kyndryl.net/Platfrom-Engineering-at-Scale/fast-track-training_week-1.git'
+        IMAGE_NAME = 'sourish4c/k8demoapp'
+        DOCKER_CREDENTIALS_ID = 'dockerhub-credentials'  // Jenkins credential ID for DockerHub
+        BUILD_VERSION = 'latest'  // Default build version
+        REPO_FOLDER = 'fast-track-training_week-1'
+    }
+
+    stages {
+        stage('Clean Working Directory') {
+            steps {
+                cleanWs()
+            }
+        }
+        stage('Clone Repository') {
+            steps {
+                script {
+                    echo "Cloning repository with PAT..."
+                    withCredentials([string(credentialsId: env.GITHUB_CREDENTIALS_ID, variable: 'GITHUB_PAT')]) {
+                        def repoWithAuth = "https://${GITHUB_PAT}@${REPO_URL}"
+                        sh "git clone ${repoWithAuth}"
+                    }
+                }
+            }
+        }
+
+        stage('Extract Build Version') {
+            steps {
+                script {
+                    echo "Extracting build version from the latest commit message..."
+                    def commitMessage = sh(script: "cd fast-track-training_week-1 && git log -1 --pretty=%B", returnStdout: true).trim()
+                    def versionMatcher = commitMessage =~ /build version - v([0-9.]+)/
+
+                    if (versionMatcher) {
+                        BUILD_VERSION = versionMatcher[0][1]
+                        echo "Extracted build version: v${BUILD_VERSION}"
+                    } else {
+                        echo "No build version found in commit message. Using 'latest'."
+                    }
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    def imageTag = "${IMAGE_NAME}:${BUILD_VERSION}"
+                    echo "Building Docker image with tag ${imageTag}..."
+                    sh "cd fast-track-training_week-1 && docker build -t ${imageTag} ."
+                }
+            }
+        }
+
+        stage('Login to DockerHub') {
+            steps {
+                script {
+                    echo "Logging into DockerHub..."
+                    withCredentials([usernamePassword(credentialsId: env.DOCKER_CREDENTIALS_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        sh "echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin"
+                    }
+                }
+            }
+        }
+
+        stage('Push Docker Image and Cleanup') {
+            steps {
+                script {
+                    def imageTag = "${IMAGE_NAME}:${BUILD_VERSION}"
+                    echo "Pushing Docker image to DockerHub: ${imageTag}..."
+                    sh "docker push ${imageTag}"
+                    sh "docker rmi ${imageTag}"
+                }
+            }
+        }
+
+        // Enable either Jenkins CD stage or ArgoCD CD stage, not both at the same time. //
+        // Jenkins CD Stage ---------------------------------------------------------------
+        
+        // stage('Update Build Tag') {
+        //     steps {
+        //         script {
+        //             echo "Modifying deployment.yaml file..."
+        //             sh "sed -i 's|sourish4c/k8demoapp:latest|sourish4c/k8demoapp:${BUILD_VERSION}|' ${REPO_FOLDER}/deploy/deployment.yaml"
+        //         }
+        //     }
+        // }
+
+        // stage('Deploy to Kubernetes') {
+        //     steps {
+        //         script {
+        //             echo "Deploying to Kubernetes..."
+        //             sh "kubectl delete -f ${REPO_FOLDER}/deploy/deployment.yaml || true"
+        //             sh "kubectl apply -f ${REPO_FOLDER}/deploy/" 
+        //         }
+        //     }
+        // }
+        
+        // Jenkins CD Stage ---------------------------------------------------------------
+        
+        // ArgoCD CD Stage ----------------------------------------------------------------
+        
+        stage('Push Deployment File') {
+            steps {
+                script {    
+                    echo "Pushing deployment file to another GitHub repository..."
+                    withCredentials([string(credentialsId: env.GITHUB_CREDENTIALS_ID, variable: 'GITHUB_PAT')]) {
+                        sh """
+                            cd ${REPO_FOLDER}
+                            # Configure Git identity
+                            git config user.email "jenkins@k3s.local"
+                            git config user.name "Jenkins Pipeline"
+                            
+                            # Ensure we are on the correct branch
+                            git checkout -B argocd-deploy
+                            
+                            # Pull latest changes from the remote repository
+                            git pull https://${GITHUB_PAT}@${REPO_URL} argocd-deploy --rebase
+                            
+                            echo "Modifying deployment.yaml file..."
+                            sed -i 's|sourish4c/k8demoapp:.*|sourish4c/k8demoapp:${BUILD_VERSION}|' deploy/deployment.yaml
+                            
+                            # Add, commit, and push the changes
+                            git add deploy/deployment.yaml
+                            git commit -m 'Jenkins Update deployment.yaml with build version - v${BUILD_VERSION}'
+                            git push https://${GITHUB_PAT}@${REPO_URL} argocd-deploy
+                        """
+                    }
+                }
+            }       
+        }
+        
+        // ArgoCD CD Stage ----------------------------------------------------------------
+    }
+
+    post {
+        success {
+            echo "Pipeline executed successfully!"
+        }
+        failure {
+            echo "Pipeline failed!"
+        }
+    }
+}

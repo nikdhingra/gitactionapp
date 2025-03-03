@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8demoapp
+  namespace: app
+  labels:
+    app: k8demoapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k8demoapp
+  template:
+    metadata:
+      labels:
+        app: k8demoapp
+    spec:
+      containers:
+      - name: k8demoapp
+        image: sourish4c/k8demoapp:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 7000
