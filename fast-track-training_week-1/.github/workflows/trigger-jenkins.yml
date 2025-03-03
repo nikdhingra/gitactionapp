@@ -1,0 +1,15 @@
+name: Trigger Jenkins Build
+
+on:
+  push:
+    branches:
+      - main  # Trigger the workflow when code is pushed to main branch
+
+jobs:
+  trigger-jenkins:
+    runs-on: ubuntu-vm
+
+    steps:
+      - name: Send Trigger Request to Jenkins
+        run: |
+          curl -X POST "http://sourish:${{ secrets.TOKEN }}@k3s.local:8088/job/k8demo-app/build"
